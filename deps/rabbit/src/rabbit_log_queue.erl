@@ -22,86 +22,99 @@
 
 -compile({no_auto_import, [error/2]}).
 
-%%----------------------------------------------------------------------------
-
 -spec debug(string()) -> 'ok'.
--spec debug(string(), [any()]) -> 'ok'.
--spec debug(pid() | [tuple()], string(), [any()]) -> 'ok'.
--spec info(string()) -> 'ok'.
--spec info(string(), [any()]) -> 'ok'.
--spec info(pid() | [tuple()], string(), [any()]) -> 'ok'.
--spec notice(string()) -> 'ok'.
--spec notice(string(), [any()]) -> 'ok'.
--spec notice(pid() | [tuple()], string(), [any()]) -> 'ok'.
--spec warning(string()) -> 'ok'.
--spec warning(string(), [any()]) -> 'ok'.
--spec warning(pid() | [tuple()], string(), [any()]) -> 'ok'.
--spec error(string()) -> 'ok'.
--spec error(string(), [any()]) -> 'ok'.
--spec error(pid() | [tuple()], string(), [any()]) -> 'ok'.
--spec critical(string()) -> 'ok'.
--spec critical(string(), [any()]) -> 'ok'.
--spec critical(pid() | [tuple()], string(), [any()]) -> 'ok'.
--spec alert(string()) -> 'ok'.
--spec alert(string(), [any()]) -> 'ok'.
--spec alert(pid() | [tuple()], string(), [any()]) -> 'ok'.
--spec emergency(string()) -> 'ok'.
--spec emergency(string(), [any()]) -> 'ok'.
--spec emergency(pid() | [tuple()], string(), [any()]) -> 'ok'.
--spec none(string()) -> 'ok'.
--spec none(string(), [any()]) -> 'ok'.
--spec none(pid() | [tuple()], string(), [any()]) -> 'ok'.
-
-%%----------------------------------------------------------------------------
-
 debug(Format) -> debug(Format, []).
+
+-spec debug(string(), [any()]) -> 'ok'.
 debug(Format, Args) -> debug(self(), Format, Args).
+
+-spec debug(pid() | [tuple()], string(), [any()]) -> 'ok'.
 debug(Pid, Format, Args) ->
     logger:debug(Format, Args, #{pid => Pid,
                                  domain => ?RMQLOG_DOMAIN_QUEUE}).
 
+-spec info(string()) -> 'ok'.
 info(Format) -> info(Format, []).
+
+-spec info(string(), [any()]) -> 'ok'.
 info(Format, Args) -> info(self(), Format, Args).
+
+-spec info(pid() | [tuple()], string(), [any()]) -> 'ok'.
 info(Pid, Format, Args) ->
     logger:info(Format, Args, #{pid => Pid,
                                 domain => ?RMQLOG_DOMAIN_QUEUE}).
 
+-spec notice(string()) -> 'ok'.
 notice(Format) -> notice(Format, []).
+
+-spec notice(string(), [any()]) -> 'ok'.
 notice(Format, Args) -> notice(self(), Format, Args).
+
+-spec notice(pid() | [tuple()], string(), [any()]) -> 'ok'.
 notice(Pid, Format, Args) ->
     logger:notice(Format, Args, #{pid => Pid,
                                   domain => ?RMQLOG_DOMAIN_QUEUE}).
 
+-spec warning(string()) -> 'ok'.
 warning(Format) -> warning(Format, []).
+
+-spec warning(string(), [any()]) -> 'ok'.
 warning(Format, Args) -> warning(self(), Format, Args).
+
+-spec warning(pid() | [tuple()], string(), [any()]) -> 'ok'.
 warning(Pid, Format, Args) ->
     logger:warning(Format, Args, #{pid => Pid,
                                    domain => ?RMQLOG_DOMAIN_QUEUE}).
 
+-spec error(string()) -> 'ok'.
 error(Format) -> error(Format, []).
+
+-spec error(string(), [any()]) -> 'ok'.
 error(Format, Args) -> error(self(), Format, Args).
+
+-spec error(pid() | [tuple()], string(), [any()]) -> 'ok'.
 error(Pid, Format, Args) ->
     logger:error(Format, Args, #{pid => Pid,
                                  domain => ?RMQLOG_DOMAIN_QUEUE}).
 
+-spec critical(string()) -> 'ok'.
 critical(Format) -> critical(Format, []).
+
+-spec critical(string(), [any()]) -> 'ok'.
 critical(Format, Args) -> critical(self(), Format, Args).
+
+-spec critical(pid() | [tuple()], string(), [any()]) -> 'ok'.
 critical(Pid, Format, Args) ->
     logger:critical(Format, Args, #{pid => Pid,
                                     domain => ?RMQLOG_DOMAIN_QUEUE}).
 
+-spec alert(string()) -> 'ok'.
 alert(Format) -> alert(Format, []).
+
+-spec alert(string(), [any()]) -> 'ok'.
 alert(Format, Args) -> alert(self(), Format, Args).
+
+-spec alert(pid() | [tuple()], string(), [any()]) -> 'ok'.
 alert(Pid, Format, Args) ->
     logger:alert(Format, Args, #{pid => Pid,
                                  domain => ?RMQLOG_DOMAIN_QUEUE}).
 
+-spec emergency(string()) -> 'ok'.
 emergency(Format) -> emergency(Format, []).
+
+-spec emergency(string(), [any()]) -> 'ok'.
 emergency(Format, Args) -> emergency(self(), Format, Args).
+
+-spec emergency(pid() | [tuple()], string(), [any()]) -> 'ok'.
 emergency(Pid, Format, Args) ->
     logger:emergency(Format, Args, #{pid => Pid,
                                      domain => ?RMQLOG_DOMAIN_QUEUE}).
 
+-spec none(string()) -> 'ok'.
 none(_Format) -> ok.
+
+-spec none(string(), [any()]) -> 'ok'.
 none(_Format, _Args) -> ok.
+
+-spec none(pid() | [tuple()], string(), [any()]) -> 'ok'.
 none(_Pid, _Format, _Args) -> ok.

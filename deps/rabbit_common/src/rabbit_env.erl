@@ -78,6 +78,10 @@
          "SYS_PREFIX"
         ]).
 
+-export_type([context/0]).
+
+-type context() :: map().
+
 get_context() ->
     Context0 = get_context_before_logging_init(),
     Context1 = get_context_after_logging_init(Context0),

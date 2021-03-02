@@ -671,8 +671,6 @@ is_date_based_rotation_needed(#{last_rotation_ts:=PrevTimestamp,
         true -> {true,Rotation#{last_rotation_ts=>CurrTimestamp}};
         false -> {false,Rotation}
     end;
-is_date_based_rotation_needed(#{last_rotation_ts:=_}=Rotation) ->
-    {false,Rotation};
 is_date_based_rotation_needed(Rotation) ->
     {false,Rotation#{last_rotation_ts=>rotation_timestamp()}}.
 

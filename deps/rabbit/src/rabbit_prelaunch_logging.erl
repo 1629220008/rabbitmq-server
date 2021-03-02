@@ -2,8 +2,91 @@
 %% License, v. 2.0. If a copy of the MPL was not distributed with this
 %% file, You can obtain one at https://mozilla.org/MPL/2.0/.
 %%
-%% Copyright (c) 2007-2020 VMware, Inc. or its affiliates.  All rights reserved.
+%% Copyright (c) 2019-2021 VMware, Inc. or its affiliates.  All rights reserved.
 %%
+
+%% @author The RabbitMQ team
+%% @copyright 2019-2021 VMware, Inc. or its affiliates.
+%%
+%% @doc
+%% This module manages the configuration of the Erlang Logger facility. In
+%% other words, it translates the RabbitMQ logging configuration (in the
+%% Cuttlefish format or classic Erlang-term-based configuration) into Erlang
+%% Logger handler setups.
+%%
+%% Configuring the Erlang Logger is done in two steps:
+%% <ol>
+%% <li>Logger handler configurations are created based on the configuration
+%% and the context (see {@link //rabbit_common/rabbit_env}).</li>
+%% <li>Created handlers are installed (i.e. they become active). Any handlers
+%% previously installed by this module are removed.</li>
+%% </ol>
+%%
+%% It also takes care of setting the `$ERL_CRASH_DUMP' variable to enable
+%% Erlang core dumps.
+%%
+%% Note that before this module handles the Erlang Logger, {@link
+%% //rabbitmq_prelaunch/rabbit_prelaunch_early_logging} configures basic
+%% logging to have messages logged as soon as possible during RabbitMQ
+%% startup.
+%%
+%% == How to configure RabbitMQ logging ==
+%%
+%% RabbitMQ supports a main/default logging output and per-category outputs.
+%% An output is a combination of a destination (a text file or stdout for
+%% example) and a message formatted (e.g. plain text or JSON).
+%%
+%% Here is the Erlang-term-based configuration expected and supported by this
+%% module:
+%%
+%% ```
+%% {rabbit, [
+%%   {log_root, string()},
+%%   {log, [
+%%     {categories, [
+%%       {default, [
+%%         {level, Level}
+%%       ]},
+%%       {CategoryName, [
+%%         {level, Level},
+%%         {file, Filename}
+%%       ]}
+%%     ]},
+%%
+%%     {console, [
+%%       {level, Level},
+%%       {enabled, boolean()}
+%%     ]},
+%%
+%%     {exchange, [
+%%       {level, Level},
+%%       {enabled, boolean()}
+%%     ]},
+%%
+%%     {file, [
+%%       {level, Level},
+%%       {file, Filename | false},
+%%       {date, RotationDateSpec},
+%%       {size, RotationSize},
+%%       {count, RotationCount},
+%%     ]},
+%%
+%%     {syslog, [
+%%       {level, Level},
+%%       {enabled, boolean()}
+%%     ]}
+%%   ]}
+%% ]}.
+%%
+%% Level = logger:level().
+%% Filename = file:filename().
+%% RotationDateSpec = string(). % Pattern format used by newsyslog.conf(5).
+%% RotationSize = non_neg_integer() | infinity.
+%% RotationCount = non_neg_integer().
+%% '''
+%%
+%% See `priv/schema/rabbit.schema' for the definition of the Cuttlefish
+%% configuration schema.
 
 -module(rabbit_prelaunch_logging).
 
@@ -20,28 +103,65 @@
 
 -export_type([log_location/0]).
 
--type log_location() :: file:name() | string().
+-type log_location() :: file:filename() | string().
+%% A short description of an output.
+%%
+%% If the output is the console, the location is either `"<stdout>"' or
+%% `"<stderr>"'.
+%%
+%% If the output is an exchange, the location is the string `"exchange:"' with
+%% the exchange name appended.
+%%
+%% If the output is a file, the location is the absolute filename.
+%%
+%% If the output is syslog, the location is the string `"syslog:"' with the
+%% syslog server hostname appended.
 
--define(CONFIG_RUN_NUMBER_KEY, {?MODULE, config_run_number}).
+-type category_name() :: atom().
 
-%% Logging configuration in the `rabbit` Erlang application.
+-type console_props() :: [{level, logger:level()} |
+                          {enabled, boolean()}].
+-type exchange_props() :: console_props().
+-type file_props() :: [{level, logger:level()} |
+                       {file, file:filename() | false} |
+                       {date, string()} |
+                       {size, non_neg_integer()} |
+                       {count, non_neg_integer()}].
+-type syslog_props() :: console_props().
+-type main_log_env() :: [{console, console_props()} |
+                         {exchange, exchange_props()} |
+                         {file, file_props()} |
+                         {syslog, syslog_props()}].
+-type per_cat_env() :: [{level, logger:level()} |
+                        {file, file:filename()}].
+-type default_cat_env() :: [{level, logger:level()}].
+-type log_app_env() :: [main_log_env() |
+                        {categories, [{default, default_cat_env()} |
+                                      {category_name(), per_cat_env()}]}].
+
+-type per_cat_log_config() :: #{level => logger:level() | all | none,
+                                outputs := [logger:handler_config()]}.
+-type global_log_config() :: per_cat_log_config().
+-type log_config() :: #{global := global_log_config(),
+                        per_category := #{
+                          category_name() => per_cat_log_config()}}.
+-type handler_key() :: atom().
+
+-type id_assignment_state() :: #{config_run_number := pos_integer(),
+                                 next_file := pos_integer()}.
+
+-spec setup(rabbit_env:context()) -> ok.
+%% @doc
+%% Configures or reconfigures logging.
 %%
-%% {rabbit, [
-%%   {log, [
-%%     {categories, [
-%%       {Category, [
-%%         {level, Level},
-%%         FileOutputProps
-%%       ]},
+%% The logging framework is the builtin Erlang Logger API. The configuration
+%% is based on the configuration file and the environment.
 %%
-%%       {default, [
-%%         {level, Level}
-%%       ]}
-%%     ]},
+%% In addition to logging, it sets the `$ERL_CRASH_DUMP' environment variable
+%% to enable Erlang crash dumps.
 %%
-%%     OutputsProps
-%%   ]
-%% ]}.
+%% @param Context the RabbitMQ context (see {@link
+%% //rabbitmq_prelaunch/rabbit_prelaunch:get_context/0}).
 
 setup(Context) ->
     ?LOG_DEBUG("\n== Logging ==",
@@ -50,8 +170,27 @@ setup(Context) ->
     ok = set_ERL_CRASH_DUMP_envvar(Context),
     ok = configure_logger(Context).
 
+-spec set_log_level(logger:level()) -> ok | {error, term()}.
+%% @doc
+%% Changes the global log level.
+%%
+%% Any message with a less severe log level will be discarded. However, more
+%% severe messages may still be discarded as well if an output is configured
+%% with a less verbose log level: this function does not change per-output log
+%% level.
+%%
+%% @param Level the log level to set the primary config to.
+
 set_log_level(Level) ->
     logger:set_primary_config(level, Level).
+
+-spec log_locations() -> [file:filename() | string()].
+%% @doc
+%% Returns the list of output locations.
+%%
+%% @returns the list of output locations.
+%%
+%% @see log_location()
 
 log_locations() ->
     Handlers = logger:get_handler_config(),
@@ -105,6 +244,8 @@ add_once(Locations, Location) ->
 %% ERL_CRASH_DUMP setting.
 %% -------------------------------------------------------------------
 
+-spec set_ERL_CRASH_DUMP_envvar(rabbit_env:context()) -> ok.
+
 set_ERL_CRASH_DUMP_envvar(Context) ->
     case os:getenv("ERL_CRASH_DUMP") of
         false ->
@@ -124,6 +265,8 @@ set_ERL_CRASH_DUMP_envvar(Context) ->
             ok
     end.
 
+-spec get_log_base_dir(rabbit_env:context()) -> file:filename().
+
 get_log_base_dir(#{log_base_dir := LogBaseDirFromEnv} = Context) ->
     case rabbit_env:has_var_been_overridden(Context, log_base_dir) of
         false -> application:get_env(rabbit, log_root, LogBaseDirFromEnv);
@@ -134,12 +277,20 @@ get_log_base_dir(#{log_base_dir := LogBaseDirFromEnv} = Context) ->
 %% Logger's handlers configuration.
 %% -------------------------------------------------------------------
 
+-define(CONFIG_RUN_NUMBER_KEY, {?MODULE, config_run_number}).
+
+-spec compute_config_run_number() -> ok.
+
 compute_config_run_number() ->
     RunNum = persistent_term:get(?CONFIG_RUN_NUMBER_KEY, 0),
     ok = persistent_term:put(?CONFIG_RUN_NUMBER_KEY, RunNum + 1).
 
+-spec get_config_run_number() -> pos_integer().
+
 get_config_run_number() ->
     persistent_term:get(?CONFIG_RUN_NUMBER_KEY).
+
+-spec configure_logger(rabbit_env:context()) -> ok.
 
 configure_logger(Context) ->
     %% Configure main handlers.
@@ -159,7 +310,9 @@ configure_logger(Context) ->
     ok = install_handlers(Handlers),
     ?LOG_NOTICE("Logging: configured log handlers are now ACTIVE",
                 #{domain => ?RMQLOG_DOMAIN_PRELAUNCH}),
-    ok = maybe_log_test_messsages(LogConfig3).
+    ok = maybe_log_test_messages(LogConfig3).
+
+-spec get_log_configuration_from_app_env() -> log_config().
 
 get_log_configuration_from_app_env() ->
     %% The log configuration in the Cuttlefish configuration file or the
@@ -167,7 +320,7 @@ get_log_configuration_from_app_env() ->
     %% responsible for extracting the configuration and organize it. If one day
     %% we decide to fix the configuration structure, we just have to modify
     %% this function and normalize_*().
-    Env = application:get_env(rabbit, log, []),
+    Env = get_log_app_env(),
     DefaultAndCatProps = proplists:get_value(categories, Env, []),
     DefaultProps = proplists:get_value(default, DefaultAndCatProps, []),
     CatProps = proplists:delete(default, DefaultAndCatProps),
@@ -178,6 +331,14 @@ get_log_configuration_from_app_env() ->
     GlobalConfig = normalize_main_log_config(EnvWithoutCats, DefaultProps),
     #{global => GlobalConfig,
       per_category => PerCatConfig}.
+
+-spec get_log_app_env() -> log_app_env().
+
+get_log_app_env() ->
+    application:get_env(rabbit, log, []).
+
+-spec normalize_main_log_config(main_log_env(), default_cat_env()) ->
+    global_log_config().
 
 normalize_main_log_config(Props, DefaultProps) ->
     Outputs = case proplists:get_value(level, DefaultProps) of
@@ -194,6 +355,16 @@ normalize_main_log_config1([{Type, Props} | Rest],
     normalize_main_log_config1(Rest, LogConfig1);
 normalize_main_log_config1([], LogConfig) ->
     LogConfig.
+
+-spec normalize_main_output
+(console, console_props(), [logger:handler_config()]) ->
+    [logger:handler_config()];
+(exchange, exchange_props(), [logger:handler_config()]) ->
+    [logger:handler_config()];
+(file, file_props(), [logger:handler_config()]) ->
+    [logger:handler_config()];
+(syslog, syslog_props(), [logger:handler_config()]) ->
+    [logger:handler_config()].
 
 normalize_main_output(file, Props, Outputs) ->
     normalize_main_file_output(
@@ -219,6 +390,10 @@ normalize_main_output(exchange, Props, Outputs) ->
       #{module => rabbit_logger_exchange_h,
         config => #{}},
       Outputs).
+
+-spec normalize_main_file_output(file_props(), logger:handler_config(),
+                                 [logger:handler_config()]) ->
+    [logger:handler_config()].
 
 normalize_main_file_output([{file, false} | _], _, Outputs) ->
     lists:filter(
@@ -249,6 +424,11 @@ normalize_main_file_output([{count, Count} | Rest],
     normalize_main_file_output(Rest, Output1, Outputs);
 normalize_main_file_output([], Output, Outputs) ->
     [Output | Outputs].
+
+-spec normalize_main_console_output(console_props(), logger:handler_config(),
+                                    [logger:handler_config()]) ->
+    [logger:handler_config()].
+
 normalize_main_console_output(
   [{enabled, false} | _],
   #{module := Mod1, config := #{type := Stddev}},
@@ -284,6 +464,8 @@ normalize_main_console_output([{level, Level} | Rest],
 normalize_main_console_output([], Output, Outputs) ->
     [Output | Outputs].
 
+-spec normalize_per_cat_log_config(per_cat_env()) -> per_cat_log_config().
+
 normalize_per_cat_log_config(Props) ->
     normalize_per_cat_log_config(Props, #{outputs => []}).
 
@@ -300,10 +482,17 @@ normalize_per_cat_log_config([{file, Filename} | Rest],
 normalize_per_cat_log_config([], LogConfig) ->
     LogConfig.
 
+-spec handle_default_and_overridden_outputs(log_config(),
+                                            rabbit_env:context()) ->
+    log_config().
+
 handle_default_and_overridden_outputs(LogConfig, Context) ->
     LogConfig1 = handle_default_main_output(LogConfig, Context),
     LogConfig2 = handle_default_upgrade_cat_output(LogConfig1, Context),
     LogConfig2.
+
+-spec handle_default_main_output(log_config(), rabbit_env:context()) ->
+    log_config().
 
 handle_default_main_output(
   #{global := #{outputs := Outputs} = GlobalConfig} = LogConfig,
@@ -342,6 +531,9 @@ handle_default_main_output(
                                  outputs => Outputs1}}
     end.
 
+-spec handle_default_upgrade_cat_output(log_config(), rabbit_env:context()) ->
+    log_config().
+
 handle_default_upgrade_cat_output(
   #{per_category := PerCatConfig} = LogConfig,
   #{upgrade_log_file := UpgLogFile} = Context) ->
@@ -374,6 +566,9 @@ handle_default_upgrade_cat_output(
                                                     outputs => Outputs1}}}
     end.
 
+-spec apply_log_levels_from_env(log_config(), rabbit_env:context()) ->
+    log_config().
+
 apply_log_levels_from_env(LogConfig, #{log_levels := LogLevels})
   when is_map(LogLevels) ->
     maps:fold(
@@ -393,6 +588,9 @@ apply_log_levels_from_env(LogConfig, #{log_levels := LogLevels})
       end, LogConfig, LogLevels);
 apply_log_levels_from_env(LogConfig, _) ->
     LogConfig.
+
+-spec make_filenames_absolute(log_config(), rabbit_env:context()) ->
+    log_config().
 
 make_filenames_absolute(
   #{global := GlobalConfig, per_category := PerCatConfig} = LogConfig,
@@ -419,6 +617,9 @@ make_filenames_absolute1(#{outputs := Outputs} = Config, LogBaseDir) ->
                          Output
                  end, Outputs),
     Config#{outputs => Outputs1}.
+
+-spec configure_formatters(log_config(), rabbit_env:context()) ->
+    log_config().
 
 configure_formatters(
   #{global := GlobalConfig, per_category := PerCatConfig} = LogConfig,
@@ -460,6 +661,9 @@ configure_formatters1(#{outputs := Outputs} = Config, Context) ->
                  end, Outputs),
     Config#{outputs => Outputs1}.
 
+-spec create_logger_handlers_conf(log_config()) ->
+    [logger:handler_config()].
+
 create_logger_handlers_conf(
   #{global := GlobalConfig, per_category := PerCatConfig}) ->
     Handlers0 = create_global_handlers_conf(GlobalConfig),
@@ -468,8 +672,16 @@ create_logger_handlers_conf(
     Handlers3 = assign_handler_ids(Handlers2),
     Handlers3.
 
+-spec create_global_handlers_conf(global_log_config()) ->
+    #{handler_key() := logger:handler_config()}.
+
 create_global_handlers_conf(#{outputs := Outputs} = GlobalConfig) ->
     create_handlers_conf(Outputs, global, GlobalConfig, #{}).
+
+-spec create_per_cat_handlers_conf(
+        #{category_name() => per_cat_log_config()},
+        #{handler_key() => logger:handler_config()}) ->
+    #{handler_key() => logger:handler_config()}.
 
 create_per_cat_handlers_conf(PerCatConfig, Handlers) ->
     maps:fold(
@@ -480,6 +692,12 @@ create_per_cat_handlers_conf(PerCatConfig, Handlers) ->
               Hdls1 = create_handlers_conf(Outputs, CatName, CatConfig, Hdls),
               filter_out_cat_in_other_handlers(Hdls1, CatName)
       end, Handlers, PerCatConfig).
+
+-spec create_handlers_conf(
+        [logger:handler_config()], global | category_name(),
+        global_log_config() | per_cat_log_config(),
+        #{handler_key() => logger:handler_config()}) ->
+    #{handler_key() => logger:handler_config()}.
 
 create_handlers_conf([Output | Rest], CatName, Config, Handlers) ->
     Key = create_handler_key(Output),
@@ -492,6 +710,8 @@ create_handlers_conf([Output | Rest], CatName, Config, Handlers) ->
     create_handlers_conf(Rest, CatName, Config, Handlers1);
 create_handlers_conf([], _, _, Handlers) ->
     Handlers.
+
+-spec create_handler_key(logger:handler_config()) -> handler_key().
 
 create_handler_key(
   #{module := Mod, config := #{type := file, file := Filename}})
@@ -512,6 +732,11 @@ create_handler_key(
   #{module := rabbit_logger_exchange_h}) ->
     exchange.
 
+-spec create_handler_conf(
+        logger:handler_config(), global | category_name(),
+        global_log_config() | per_cat_log_config()) ->
+    logger:handler_config().
+
 create_handler_conf(Output, global, Config) ->
     Level = compute_level_from_config_and_output(Config, Output),
     Output#{level => Level,
@@ -525,6 +750,11 @@ create_handler_conf(Output, CatName, Config) ->
             filters => [{?FILTER_NAME,
                          {fun filter_log_event/2, #{CatName => Level}}}]}.
 
+-spec update_handler_conf(
+        logger:handler_config(), global | category_name(),
+        logger:handler_config()) ->
+    logger:handler_config().
+
 update_handler_conf(
   #{level := ConfiguredLevel} = Handler, global, Output) ->
     case Output of
@@ -537,6 +767,11 @@ update_handler_conf(
 update_handler_conf(Handler, CatName, Output) ->
     add_cat_filter(Handler, CatName, Output).
 
+-spec compute_level_from_config_and_output(
+        global_log_config() | per_cat_log_config(),
+        logger:handler_config()) ->
+    logger:level().
+
 compute_level_from_config_and_output(Config, Output) ->
     case Output of
         #{level := Level} ->
@@ -548,11 +783,20 @@ compute_level_from_config_and_output(Config, Output) ->
             end
     end.
 
+-spec filter_cat_in_global_handlers(
+        #{handler_key() => logger:handler_config()}, category_name(),
+        per_cat_log_config()) ->
+    #{handler_key() => logger:handler_config()}.
+
 filter_cat_in_global_handlers(Handlers, CatName, CatConfig) ->
     maps:map(
       fun(_, Handler) ->
               add_cat_filter(Handler, CatName, CatConfig)
       end, Handlers).
+
+-spec filter_out_cat_in_other_handlers(
+        #{handler_key() => logger:handler_config()}, category_name()) ->
+    #{handler_key() => logger:handler_config()}.
 
 filter_out_cat_in_other_handlers(Handlers, CatName) ->
     maps:map(
@@ -560,12 +804,18 @@ filter_out_cat_in_other_handlers(Handlers, CatName) ->
               {_, FilterConfig} = proplists:get_value(?FILTER_NAME, Filters),
               case maps:is_key(CatName, FilterConfig) of
                   true  -> Handler;
-                  false -> add_cat_filter(Handler, CatName, #{level => none})
+                  false -> add_cat_filter(Handler, CatName, #{level => none,
+                                                              outputs => []})
               end
       end, Handlers).
 
-add_cat_filter(Handler, CatName, CatConfig) ->
-    Level = case CatConfig of
+-spec add_cat_filter(
+        logger:handler_config(), category_name(),
+        per_cat_log_config() | logger:handler_config()) ->
+    logger:handler_config().
+
+add_cat_filter(Handler, CatName, CatConfigOrOutput) ->
+    Level = case CatConfigOrOutput of
                 #{level := L} -> L;
                 _             -> maps:get(level, Handler)
             end,
@@ -578,8 +828,13 @@ do_add_cat_filter(#{filters := Filters} = Handler, CatName, Level) ->
                               {?FILTER_NAME, {Fun, FilterConfig1}}),
     Handler#{filters => Filters1}.
 
+-spec filter_log_event(logger:log_even(), term()) -> logger:filter_return().
+
 filter_log_event(LogEvent, FilterConfig) ->
     rabbit_prelaunch_early_logging:filter_log_event(LogEvent, FilterConfig).
+
+-spec adjust_log_levels(#{handler_key() => logger:handler_config()}) ->
+    #{handler_key() => logger:handler_config()}.
 
 adjust_log_levels(Handlers) ->
     maps:map(
@@ -592,6 +847,9 @@ adjust_log_levels(Handlers) ->
               Handler#{level => Level}
       end, Handlers).
 
+-spec assign_handler_ids(#{handler_key() => logger:handler_config()}) ->
+    [logger:handler_config()].
+
 assign_handler_ids(Handlers) ->
     Handlers1 = [maps:get(Key, Handlers)
                  || Key <- lists:sort(maps:keys(Handlers))],
@@ -599,6 +857,11 @@ assign_handler_ids(Handlers) ->
                        #{config_run_number => get_config_run_number(),
                          next_file => 1},
                        []).
+
+-spec assign_handler_ids(
+        [logger:handler_config()], id_assignment_state(),
+        [logger:handler_config()]) ->
+    [logger:handler_config()].
 
 assign_handler_ids(
   [#{module := Mod, config := #{type := file}} = Handler | Rest],
@@ -644,8 +907,13 @@ assign_handler_ids(
 assign_handler_ids([], _, Result) ->
     lists:reverse(Result).
 
+-spec format_id(io:format(), [term()], id_assignment_state()) ->
+    logger:handler_id().
+
 format_id(Format, Args, #{config_run_number := RunNum}) ->
     list_to_atom(rabbit_misc:format("rmq_~b_" ++ Format, [RunNum | Args])).
+
+-spec install_handlers([logger:handler_config()]) -> ok | no_return().
 
 install_handlers([]) ->
     throw(no_logger_handler_configured);
@@ -654,6 +922,8 @@ install_handlers(Handlers) ->
     ok = remove_old_handlers(),
     ok = define_primary_level(Handlers),
     ok.
+
+-spec do_install_handlers([logger:handler_config()]) -> ok | no_return().
 
 do_install_handlers([#{id := Id, module := Module} = Handler | Rest]) ->
     case logger:add_handler(Id, Module, Handler) of
@@ -666,6 +936,8 @@ do_install_handlers([#{id := Id, module := Module} = Handler | Rest]) ->
     end;
 do_install_handlers([]) ->
     ok.
+
+-spec remove_old_handlers() -> ok.
 
 remove_old_handlers() ->
     _ = logger:remove_handler(default),
@@ -693,8 +965,14 @@ remove_old_handlers() ->
       end, lists:sort(logger:get_handler_ids())),
     ok.
 
+-spec define_primary_level([logger:handler_config()]) ->
+    ok | {error, term()}.
+
 define_primary_level(Handlers) ->
     define_primary_level(Handlers, emergency).
+
+-spec define_primary_level([logger:handler_config()], logger:level()) ->
+    ok | {error, term()}.
 
 define_primary_level([#{level := Level} | Rest], PrimaryLevel) ->
     NewLevel = get_less_severe_level(Level, PrimaryLevel),
@@ -702,20 +980,33 @@ define_primary_level([#{level := Level} | Rest], PrimaryLevel) ->
 define_primary_level([], PrimaryLevel) ->
     logger:set_primary_config(level, PrimaryLevel).
 
+-spec get_less_severe_level(logger:level(), logger:level()) -> logger:level().
+%% @doc
+%% Compares two log levels and returns the less severe one.
+%%
+%% @param LevelA the log level to compare to LevelB.
+%% @param LevelB the log level to compare to LevelA.
+%%
+%% @returns the less severe log level.
+
 get_less_severe_level(LevelA, LevelB) ->
     case logger:compare_levels(LevelA, LevelB) of
         lt -> LevelA;
         _  -> LevelB
     end.
 
-maybe_log_test_messsages(
+-spec maybe_log_test_messages(log_config()) -> ok.
+
+maybe_log_test_messages(
   #{per_category := #{prelaunch := #{level := debug}}}) ->
     log_test_messages();
-maybe_log_test_messsages(
+maybe_log_test_messages(
   #{global := #{level := debug}}) ->
     log_test_messages();
-maybe_log_test_messsages(_) ->
+maybe_log_test_messages(_) ->
     ok.
+
+-spec log_test_messages() -> ok.
 
 log_test_messages() ->
     ?LOG_DEBUG("Testing debug log level",
