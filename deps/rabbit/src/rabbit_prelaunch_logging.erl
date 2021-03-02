@@ -11,6 +11,7 @@
 -include_lib("rabbit_common/include/logging.hrl").
 
 -export([setup/1,
+         set_log_level/1,
          log_locations/0]).
 
 -ifdef(TEST).
@@ -49,12 +50,8 @@ setup(Context) ->
     ok = set_ERL_CRASH_DUMP_envvar(Context),
     ok = configure_logger(Context).
 
-compute_config_run_number() ->
-    RunNum = persistent_term:get(?CONFIG_RUN_NUMBER_KEY, 0),
-    ok = persistent_term:put(?CONFIG_RUN_NUMBER_KEY, RunNum + 1).
-
-get_config_run_number() ->
-    persistent_term:get(?CONFIG_RUN_NUMBER_KEY).
+set_log_level(Level) ->
+    logger:set_primary_config(level, Level).
 
 log_locations() ->
     Handlers = logger:get_handler_config(),
@@ -136,6 +133,13 @@ get_log_base_dir(#{log_base_dir := LogBaseDirFromEnv} = Context) ->
 %% -------------------------------------------------------------------
 %% Logger's handlers configuration.
 %% -------------------------------------------------------------------
+
+compute_config_run_number() ->
+    RunNum = persistent_term:get(?CONFIG_RUN_NUMBER_KEY, 0),
+    ok = persistent_term:put(?CONFIG_RUN_NUMBER_KEY, RunNum + 1).
+
+get_config_run_number() ->
+    persistent_term:get(?CONFIG_RUN_NUMBER_KEY).
 
 configure_logger(Context) ->
     %% Configure main handlers.

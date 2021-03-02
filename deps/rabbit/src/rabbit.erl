@@ -31,7 +31,8 @@
          base_product_version/0,
          motd_file/0,
          motd/0]).
--export([log_locations/0, config_files/0]). %% for testing and mgmt-agent
+%% For CLI, testing and mgmt-agent.
+-export([set_log_level/1, log_locations/0, config_files/0]).
 -export([is_booted/1, is_booted/0, is_booting/1, is_booting/0]).
 
 %%---------------------------------------------------------------------------
@@ -857,7 +858,6 @@ start(normal, []) ->
         %%
         %% Note that plugins were not taken care of at this point
         %% either.
-        throw(moche),
         ?LOG_DEBUG(
           "Register `rabbit` process (~p) for rabbit_node_monitor",
           [self()]),
@@ -1056,6 +1056,10 @@ insert_default_data() ->
 
 %%---------------------------------------------------------------------------
 %% logging
+
+-spec set_log_level(logger:level()) -> ok.
+set_log_level(Level) ->
+    rabbit_prelaunch_logging:set_log_level(Level).
 
 -spec log_locations() -> [rabbit_prelaunch_logging:log_location()].
 log_locations() ->

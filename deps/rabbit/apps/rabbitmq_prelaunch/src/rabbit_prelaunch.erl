@@ -72,7 +72,7 @@ do_run() ->
     ?assertMatch(#{}, Context0),
 
     %% Setup logging for the prelaunch phase.
-    ok = rabbit_prelaunch_early_logging:setup_early_logging(Context0, true),
+    ok = rabbit_prelaunch_early_logging:setup_early_logging(Context0),
 
     IsInitialPass = is_initial_pass(),
     case IsInitialPass of
@@ -90,7 +90,7 @@ do_run() ->
     %% Load rabbitmq-env.conf, redo logging setup and continue.
     Context1 = rabbit_env:get_context_after_logging_init(Context0),
     ?assertMatch(#{}, Context1),
-    ok = rabbit_prelaunch_early_logging:setup_early_logging(Context1, true),
+    ok = rabbit_prelaunch_early_logging:setup_early_logging(Context1),
     rabbit_env:log_process_env(),
 
     %% Complete context now that we have the final environment loaded.

@@ -1179,7 +1179,7 @@ end}.
 ]}.
 
 % ==========================
-% Lager section
+% Logging section
 % ==========================
 
 {mapping, "log.dir", "rabbit.log_root", [

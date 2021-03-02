@@ -11,7 +11,7 @@
 
 -include_lib("rabbit_common/include/logging.hrl").
 
--export([setup_early_logging/2,
+-export([setup_early_logging/1,
          default_formatter/1,
          default_console_formatter/1,
          default_file_formatter/1,
@@ -23,21 +23,18 @@
 
 -define(CONFIGURED_KEY, {?MODULE, configured}).
 
-setup_early_logging(#{log_levels := undefined} = Context,
-                    LagerEventToStdout) ->
-    setup_early_logging(Context#{log_levels => get_default_log_level()},
-                        LagerEventToStdout);
-setup_early_logging(Context, LagerEventToStdout) ->
+setup_early_logging(#{log_levels := undefined} = Context) ->
+    setup_early_logging(Context#{log_levels => get_default_log_level()});
+setup_early_logging(Context) ->
     case is_configured() of
         true  -> ok;
-        false -> do_setup_early_logging(Context, LagerEventToStdout)
+        false -> do_setup_early_logging(Context)
     end.
 
 get_default_log_level() ->
     #{"prelaunch" => notice}.
 
-do_setup_early_logging(#{log_levels := LogLevels} = Context,
-                       _LagerEventToStdout) ->
+do_setup_early_logging(#{log_levels := LogLevels} = Context) ->
     add_rmqlog_filter(LogLevels),
     ok = logger:update_handler_config(
            default, main_handler_config(Context)).
